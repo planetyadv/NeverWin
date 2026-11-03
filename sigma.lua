@@ -15,7 +15,6 @@ local function hasFileAccess()
     return typeof(writefile) == "function" and typeof(readfile) == "function" and typeof(isfolder) == "function" and typeof(makefolder) == "function"
 end
 
--- Очистка старых привязок
 pcall(function()
     for _, step in ipairs({"NexusCamera", "NexusTrigger", "NexusTapTap", "NexusAim", "NexusThirdPerson"}) do
         RunService:UnbindFromRenderStep(step)
@@ -67,9 +66,11 @@ local settings = {
     detectAimers = true, autoEscape = false, autoClicker = false, friendToggle = true,
     bunnyHop = false, bunnyHopMaxSpeed = 120, bunnyHopAccel = 8,
     autoStrafe = false, walkSpeed = 16,
+    fly = false, flySpeed = 50, infJump = false, noclip = false, -- NOCLIP ДОБАВЛЕН
 }
 
 local uiRegistry = { toggles = {}, sliders = {}, binds = {} }
+local flyKeys = { w = false, a = false, s = false, d = false, space = false, shift = false }
 
 -- ============================================================
 -- Друзья и Гуманоиды
@@ -443,6 +444,13 @@ createToggle(miscPage, "Auto-Strafe (Air Control)", false, function(s) settings.
 createSlider(miscPage, "Bunny Max Speed", 20, 500, settings.bunnyHopMaxSpeed, function(v) settings.bunnyHopMaxSpeed = v end, "bunnyHopMaxSpeed")
 createSlider(miscPage, "Bunny Accel", 1, 30, settings.bunnyHopAccel, function(v) settings.bunnyHopAccel = v end, "bunnyHopAccel")
 createSlider(miscPage, "Walk Speed", 16, 200, settings.walkSpeed, function(v) settings.walkSpeed = v; local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid"); if hum then hum.WalkSpeed = v end end, "walkSpeed")
+
+createSection(miscPage, "FLIGHT")
+createToggle(miscPage, "Fly (WASD to move, Space/Shift to up/down)", false, function(s) settings.fly = s end, "fly")
+createSlider(miscPage, "Fly Speed", 10, 300, settings.flySpeed, function(v) settings.flySpeed = v end, "flySpeed")
+createToggle(miscPage, "Noclip", false, function(s) settings.noclip = s end, "noclip") -- ДОБАВЛЕНО NOCLIP
+createToggle(miscPage, "Infinite Jump", false, function(s) settings.infJump = s end, "infJump")
+
 createSection(miscPage, "MISC")
 createToggle(miscPage, "Auto Clicker", false, function(s) settings.autoClicker = s end, "autoClicker")
 createToggle(miscPage, "Friend Toggle (Mid Click)", true, function(s) settings.friendToggle = s end, "friendToggle")
@@ -668,9 +676,26 @@ RunService:BindToRenderStep("NexusTapTap", Enum.RenderPriority.Camera.Value + 7,
     end)
 end)
 
--- ============================================================
--- ESP & OTHERS
--- ============================================================
+-- Silent Aim
+task.spawn(function()
+    if not hookmetamethod then return end
+    pcall(function()
+        local mouse = LocalPlayer:GetMouse()
+        local old
+        old = hookmetamethod(game, "__index", function(self, key)
+            if settings.silentAim and self == mouse and (key == "Hit" or key == "Target") then
+                local target = getClosestTarget(settings.fov)
+                if target then 
+                    if key == "Hit" then return CFrame.new(target.Position) end
+                    if key == "Target" then return target end
+                end
+            end
+            return old(self, key)
+        end)
+    end)
+end)
+
+-- ESP
 local espCache = {}
 local aimerSet = {}
 local function setupESPForCharacter(char)
@@ -890,7 +915,7 @@ RunService.Heartbeat:Connect(function(dt)
                 task.defer(function()
                     if hum.Health <= 0 then return end
                     hum:ChangeState(Enum.HumanoidStateType.Jumping); task.wait()
-                    if hrp.Parent then hrp.AssemblyLinearVelocity = Vector3.new(dir.X * newSpeed, hrp.AssemblyLinearVelocity.y, dir.Z * newSpeed) end
+                    if hrp.Parent then hrp.AssemblyLinearVelocity = Vector3.new(dir.X * newSpeed, hrp.AssemblyLinearVelocity.Y, dir.Z * newSpeed) end
                 end)
             end
         end
@@ -941,7 +966,69 @@ Players.PlayerRemoving:Connect(function(p)
 end)
 
 -- ============================================================
--- CONFIG SYSTEM (С ЭКСПОРТОМ И ИМПОРТОМ)
+-- FLY, NOCLIP & INFINITE JUMP
+-- ============================================================
+UserInputService.InputBegan:Connect(function(input)
+    if input.KeyCode == Enum.KeyCode.W then flyKeys.w = true end
+    if input.KeyCode == Enum.KeyCode.A then flyKeys.a = true end
+    if input.KeyCode == Enum.KeyCode.S then flyKeys.s = true end
+    if input.KeyCode == Enum.KeyCode.D then flyKeys.d = true end
+    if input.KeyCode == Enum.KeyCode.Space then flyKeys.space = true end
+    if input.KeyCode == Enum.KeyCode.LeftShift then flyKeys.shift = true end
+end)
+UserInputService.InputEnded:Connect(function(input)
+    if input.KeyCode == Enum.KeyCode.W then flyKeys.w = false end
+    if input.KeyCode == Enum.KeyCode.A then flyKeys.a = false end
+    if input.KeyCode == Enum.KeyCode.S then flyKeys.s = false end
+    if input.KeyCode == Enum.KeyCode.D then flyKeys.d = false end
+    if input.KeyCode == Enum.KeyCode.Space then flyKeys.space = false end
+    if input.KeyCode == Enum.KeyCode.LeftShift then flyKeys.shift = false end
+end)
+
+UserInputService.JumpRequest:Connect(function()
+    if settings.infJump then
+        local char = LocalPlayer.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if hum and hum.Health > 0 then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
+    end
+end)
+
+RunService.Heartbeat:Connect(function(dt)
+    local char = LocalPlayer.Character
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hrp or not hum or hum.Health <= 0 then return end
+
+    -- Noclip Logic
+    if settings.noclip then
+        for _, v in pairs(char:GetDescendants()) do
+            if v:IsA("BasePart") then
+                v.CanCollide = false
+            end
+        end
+    end
+
+    -- Fly Logic
+    if settings.fly then
+        hum.PlatformStand = true
+        local cam = workspace.CurrentCamera
+        local moveDir = Vector3.new(0,0,0)
+        if flyKeys.w then moveDir = moveDir + cam.CFrame.LookVector end
+        if flyKeys.s then moveDir = moveDir - cam.CFrame.LookVector end
+        if flyKeys.a then moveDir = moveDir - cam.CFrame.RightVector end
+        if flyKeys.d then moveDir = moveDir + cam.CFrame.RightVector end
+        if flyKeys.space then moveDir = moveDir + Vector3.new(0,1,0) end
+        if flyKeys.shift then moveDir = moveDir - Vector3.new(0,1,0) end
+        if moveDir.Magnitude > 0 then moveDir = moveDir.Unit end
+        hrp.AssemblyLinearVelocity = moveDir * settings.flySpeed
+    else
+        if hum.PlatformStand then hum.PlatformStand = false end
+    end
+end)
+
+-- ============================================================
+-- CONFIG SYSTEM
 -- ============================================================
 local configPanel = new("Frame", { Size = UDim2.new(0, 340, 0, 440), Position = UDim2.new(0.5, -170, 0.5, -220), BackgroundColor3 = COLORS.bg, BorderSizePixel = 0, Visible = false, ZIndex = 1000 }, ScreenGui)
 new("UICorner", { CornerRadius = UDim.new(0, 6) }, configPanel)
@@ -953,7 +1040,6 @@ new("TextLabel", { Size = UDim2.new(1, -40, 1, 0), Position = UDim2.new(0, 10, 0
 local cClose = new("TextButton", { Size = UDim2.new(0, 30, 0, 30), Position = UDim2.new(1, -35, 0.5, -15), BackgroundTransparency = 1, Text = "X", TextColor3 = COLORS.text, Font = Enum.Font.GothamBold, TextSize = 14 }, cHeader)
 cClose.MouseButton1Click:Connect(function() configPanel.Visible = false end)
 
--- Секция сохранения
 local saveBg = new("Frame", { Size = UDim2.new(1, -20, 0, 40), Position = UDim2.new(0, 10, 0, 50), BackgroundColor3 = COLORS.panel, BorderSizePixel = 0 }, configPanel)
 new("UICorner", { CornerRadius = UDim.new(0, 4) }, saveBg)
 new("UIStroke", { Color = COLORS.border, Thickness = 1 }, saveBg)
@@ -961,7 +1047,6 @@ local nameBox = new("TextBox", { Size = UDim2.new(1, -100, 1, 0), Position = UDi
 local saveBtn2 = new("TextButton", { Size = UDim2.new(0, 80, 0, 30), Position = UDim2.new(1, -90, 0.5, -15), BackgroundColor3 = COLORS.accent, BorderSizePixel = 0, Text = "Save", TextColor3 = COLORS.text, Font = Enum.Font.GothamBold, TextSize = 12 }, saveBg)
 new("UICorner", { CornerRadius = UDim.new(0, 4) }, saveBtn2)
 
--- Секция импорта (Вставить код друга)
 local importBg = new("Frame", { Size = UDim2.new(1, -20, 0, 40), Position = UDim2.new(0, 10, 0, 100), BackgroundColor3 = COLORS.panel, BorderSizePixel = 0 }, configPanel)
 new("UICorner", { CornerRadius = UDim.new(0, 4) }, importBg)
 new("UIStroke", { Color = COLORS.border, Thickness = 1 }, importBg)
@@ -972,7 +1057,6 @@ new("UICorner", { CornerRadius = UDim.new(0, 4) }, importBtn)
 local listBg = new("ScrollingFrame", { Size = UDim2.new(1, -20, 1, -160), Position = UDim2.new(0, 10, 0, 150), BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 2, ScrollBarImageColor3 = COLORS.accent, CanvasSize = UDim2.new(0, 0, 0, 0), AutomaticCanvasSize = Enum.AutomaticSize.Y }, configPanel)
 new("UIListLayout", { Padding = UDim.new(0, 5), SortOrder = Enum.SortOrder.LayoutOrder }, listBg)
 
--- Функция применения данных (используется и при загрузке файла, и при импорте)
 local function applyConfigData(data)
     for k, v in pairs(data) do
         if type(v) == "table" and v.kind then
@@ -1004,7 +1088,6 @@ local function refreshConfigList()
             new("UICorner", { CornerRadius = UDim.new(0, 4) }, btnBg)
             new("TextLabel", { Size = UDim2.new(1, -150, 1, 0), Position = UDim2.new(0, 10, 0, 0), BackgroundTransparency = 1, Text = name, TextColor3 = COLORS.text, Font = Enum.Font.GothamMedium, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left }, btnBg)
             
-            -- Кнопка Load
             local loadBtn = new("TextButton", { Size = UDim2.new(0, 40, 0, 25), Position = UDim2.new(1, -140, 0.5, -12.5), BackgroundColor3 = COLORS.success, BorderSizePixel = 0, Text = "Load", TextColor3 = COLORS.text, Font = Enum.Font.GothamBold, TextSize = 10 }, btnBg)
             new("UICorner", { CornerRadius = UDim.new(0, 3) }, loadBtn)
             loadBtn.MouseButton1Click:Connect(function() 
@@ -1016,27 +1099,23 @@ local function refreshConfigList()
                 end
             end)
 
-            -- Кнопка Share (Копировать в буфер)
             local shareBtn = new("TextButton", { Size = UDim2.new(0, 50, 0, 25), Position = UDim2.new(1, -95, 0.5, -12.5), BackgroundColor3 = COLORS.accent2, BorderSizePixel = 0, Text = "Share", TextColor3 = COLORS.text, Font = Enum.Font.GothamBold, TextSize = 10 }, btnBg)
             new("UICorner", { CornerRadius = UDim.new(0, 3) }, shareBtn)
             shareBtn.MouseButton1Click:Connect(function()
                 local path = CONFIG_FOLDER .. "/" .. name .. ".json"
                 if isfile(path) then
                     local rawStr = readfile(path)
-                    -- Кодируем в Base64, чтобы можно было спокойно скинуть в чат/дискорд
                     local encoded = nil
                     pcall(function() encoded = base64_encode(rawStr) end)
-                    
                     if encoded and typeof(setclipboard) == "function" then
                         setclipboard(encoded)
-                        showToast("Config copied to clipboard! Send it to friend.", COLORS.success)
+                        showToast("Config copied to clipboard!", COLORS.success)
                     else
                         showToast("Executor doesn't support base64/clipboard", COLORS.danger)
                     end
                 end
             end)
 
-            -- Кнопка Delete
             local delBtn = new("TextButton", { Size = UDim2.new(0, 25, 0, 25), Position = UDim2.new(1, -40, 0.5, -12.5), BackgroundColor3 = COLORS.danger, BorderSizePixel = 0, Text = "X", TextColor3 = COLORS.text, Font = Enum.Font.GothamBold, TextSize = 10 }, btnBg)
             new("UICorner", { CornerRadius = UDim.new(0, 3) }, delBtn)
             delBtn.MouseButton1Click:Connect(function()
@@ -1047,14 +1126,11 @@ local function refreshConfigList()
     end
 end
 
--- Логика импорта
 importBtn.MouseButton1Click:Connect(function()
     local str = importBox.Text
     if str == "" then return showToast("Paste friend's code first", COLORS.danger) end
-    
     local decoded = nil
     pcall(function() decoded = base64_decode(str) end)
-    
     if decoded then
         local success, data = pcall(function() return HttpService:JSONDecode(decoded) end)
         if success and type(data) == "table" then
@@ -1071,6 +1147,13 @@ end)
 
 configBtn.MouseButton1Click:Connect(function()
     configPanel.Visible = not configPanel.Visible
+    if configPanel.Visible then
+        UserInputService.MouseIconEnabled = true
+        UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+    else
+        UserInputService.MouseIconEnabled = false
+        UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
+    end
     if configPanel.Visible and hasFileAccess() then refreshConfigList() end
 end)
 
@@ -1096,7 +1179,7 @@ saveBtn2.MouseButton1Click:Connect(function()
 end)
 
 -- ============================================================
--- MAIN LOOP (Открытие меню)
+-- MAIN LOOP (С ФИКСОМ КУРСОРА)
 -- ============================================================
 local openBtn = new("TextButton", { Size = UDim2.new(0, 120, 0, 30), Position = UDim2.new(0, 20, 0, 20), BackgroundColor3 = COLORS.panel, BorderSizePixel = 0, Text = "[ NEVER WIN ]", TextColor3 = COLORS.text, Font = Enum.Font.GothamBold, TextSize = 12, AutoButtonColor = false, ZIndex = 100 }, ScreenGui)
 new("UICorner", { CornerRadius = UDim.new(0, 4) }, openBtn)
@@ -1107,18 +1190,28 @@ local function toggleMenu()
         tween(menuCanvas, { GroupTransparency = 1 }, 0.15)
         tween(menuScale, { Scale = 0.9 }, 0.15)
         task.delay(0.15, function() menuCanvas.Visible = false end)
+        
+        UserInputService.MouseIconEnabled = false
+        UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
     else
         menuCanvas.Visible = true
         menuCanvas.GroupTransparency = 1
         menuScale.Scale = 0.9
         tween(menuCanvas, { GroupTransparency = 0 }, 0.2)
         tween(menuScale, { Scale = 1 }, 0.25, Enum.EasingStyle.Quint)
+        
+        UserInputService.MouseIconEnabled = true
+        UserInputService.MouseBehavior = Enum.MouseBehavior.Default
     end
 end
 openBtn.MouseButton1Click:Connect(toggleMenu)
 
 UserInputService.InputBegan:Connect(function(input, processed)
-    if input.KeyCode == Enum.KeyCode.RightShift then toggleMenu(); return end
+    if input.KeyCode == Enum.KeyCode.RightShift then 
+        toggleMenu()
+        return 
+    end
+
     if bindListening then
         local isKb = input.UserInputType == Enum.UserInputType.Keyboard
         local isMb = isMouseInput(input.UserInputType)
@@ -1185,4 +1278,14 @@ UserInputService.InputEnded:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
 end)
 
-task.delay(0.5, toggleMenu)
+task.delay(0.5, function()
+    if not menuCanvas.Visible then
+        menuCanvas.Visible = true
+        menuCanvas.GroupTransparency = 1
+        menuScale.Scale = 0.9
+        tween(menuCanvas, { GroupTransparency = 0 }, 0.2)
+        tween(menuScale, { Scale = 1 }, 0.25, Enum.EasingStyle.Quint)
+        UserInputService.MouseIconEnabled = true
+        UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+    end
+end)
