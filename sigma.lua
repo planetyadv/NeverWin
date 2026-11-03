@@ -5,8 +5,17 @@ local Players           = game:GetService("Players")
 local UserInputService  = game:GetService("UserInputService")
 local RunService        = game:GetService("RunService")
 local TweenService      = game:GetService("TweenService")
+local HttpService       = game:GetService("HttpService")
 local LocalPlayer       = Players.LocalPlayer
 
+local CONFIG_FOLDER = "NEVER_WIN_Configs"
+if not isfolder(CONFIG_FOLDER) then pcall(function() makefolder(CONFIG_FOLDER) end) end
+
+local function hasFileAccess()
+    return typeof(writefile) == "function" and typeof(readfile) == "function" and typeof(isfolder) == "function" and typeof(makefolder) == "function"
+end
+
+-- Очистка старых привязок
 pcall(function()
     for _, step in ipairs({"NexusCamera", "NexusTrigger", "NexusTapTap", "NexusAim", "NexusThirdPerson"}) do
         RunService:UnbindFromRenderStep(step)
@@ -57,11 +66,13 @@ local settings = {
     antiAim = false, antiAimMode = 1, antiAimSpeed = 15,
     detectAimers = true, autoEscape = false, autoClicker = false, friendToggle = true,
     bunnyHop = false, bunnyHopMaxSpeed = 120, bunnyHopAccel = 8,
-    autoStrafe = false, -- НОВАЯ НАСТРОЙКА
+    autoStrafe = false, walkSpeed = 16,
 }
 
+local uiRegistry = { toggles = {}, sliders = {}, binds = {} }
+
 -- ============================================================
--- Друзья
+-- Друзья и Гуманоиды
 -- ============================================================
 local friends = {}
 local function isFriend(p) return p ~= nil and friends[p.UserId] == true end
@@ -71,9 +82,6 @@ local function toggleFriend(p)
     friends[p.UserId] = true; return true
 end
 
--- ============================================================
--- Все гуманоиды
--- ============================================================
 local trackedChars = {}
 local function isCharacterValid(char)
     if not char or not char.Parent then return false end
@@ -118,7 +126,7 @@ local function bindDisplay(b)
 end
 
 -- ============================================================
--- ScreenGui & FOV
+-- UI Setup
 -- ============================================================
 local ScreenGui = new("ScreenGui", { Name = "NeverWinMenu", ResetOnSpawn = false, IgnoreGuiInset = true, ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = 999 }, LocalPlayer:WaitForChild("PlayerGui"))
 
@@ -148,7 +156,6 @@ local function setFOVTargetLocked(locked)
     fovStroke.Color = c; glowStroke.Color = c
 end
 
--- Toast
 local function showToast(text, color)
     color = color or COLORS.accent
     local toast = new("TextLabel", { Size = UDim2.new(0, 380, 0, 42), Position = UDim2.new(0.5, -190, 1, -40), BackgroundColor3 = COLORS.panel, BackgroundTransparency = 1, BorderSizePixel = 0, Text = text, TextColor3 = COLORS.text, TextTransparency = 1, Font = Enum.Font.GothamBold, TextSize = 13, ZIndex = 50 }, ScreenGui)
@@ -163,9 +170,6 @@ local function showToast(text, color)
     end)
 end
 
--- ============================================================
--- UI ENIGMA
--- ============================================================
 local menuCanvas = new("CanvasGroup", { Size = UDim2.new(0, 850, 0, 520), Position = UDim2.new(0.5, 0, 0.5, 0), AnchorPoint = Vector2.new(0.5, 0.5), BackgroundColor3 = COLORS.bg, BorderSizePixel = 0, GroupTransparency = 1, Visible = false, ClipsDescendants = true }, ScreenGui)
 new("UICorner", { CornerRadius = UDim.new(0, 6) }, menuCanvas)
 new("UIStroke", { Color = COLORS.border, Thickness = 1 }, menuCanvas)
@@ -196,9 +200,13 @@ local searchBox = new("TextBox", { Size = UDim2.new(1, -30, 1, 0), Position = UD
 searchBox.Focused:Connect(function() searchBox.Text = "" end)
 searchBox.FocusLost:Connect(function() if searchBox.Text == "" then searchBox.Text = "Поиск..." end end)
 
+local configBtn = new("TextButton", { Size = UDim2.new(0, 120, 0, 30), Position = UDim2.new(1, -130, 0.5, -15), BackgroundColor3 = COLORS.accent, BorderSizePixel = 0, Text = "⚙ Конфиги", TextColor3 = COLORS.text, Font = Enum.Font.GothamBold, TextSize = 12, AutoButtonColor = false }, topbar)
+new("UICorner", { CornerRadius = UDim.new(0, 4) }, configBtn)
+configBtn.MouseEnter:Connect(function() tween(configBtn, { BackgroundColor3 = Color3.fromRGB(200, 30, 30) }, 0.15) end)
+configBtn.MouseLeave:Connect(function() tween(configBtn, { BackgroundColor3 = COLORS.accent }, 0.15) end)
+
 local contentHolder = new("Frame", { Size = UDim2.new(1, -180, 1, -60), Position = UDim2.new(0, 180, 0, 60), BackgroundTransparency = 1, ClipsDescendants = true }, menuCanvas)
 
-local toggleSetters = {}
 local function createSection(parent, text)
     local c = new("Frame", { Size = UDim2.new(1, 0, 0, 25), BackgroundTransparency = 1 }, parent)
     new("TextLabel", { Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Text = "≡ " .. text, TextColor3 = COLORS.textDim, Font = Enum.Font.GothamBold, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left }, c)
@@ -230,7 +238,7 @@ local function createToggle(parent, text, default, callback, stateId)
         state = newState; apply(anim); if callCb and callback then callback(state) end
     end
     apply(false); if state and callback then callback(true) end
-    if stateId then toggleSetters[stateId] = function(newState) setState(newState, true, false) end end
+    if stateId then uiRegistry.toggles[stateId] = function(newState) setState(newState, true, true) end end
     btn.MouseEnter:Connect(function() tween(btn, { BackgroundColor3 = COLORS.panelHover }, 0.15) end)
     btn.MouseLeave:Connect(function() tween(btn, { BackgroundColor3 = COLORS.panel }, 0.15) end)
     btn.MouseButton1Click:Connect(function() setState(not state, true, true) end)
@@ -248,7 +256,7 @@ local function createButton(parent, text, callback, isDanger)
     return btn
 end
 
-local function createSlider(parent, text, min, max, default, callback)
+local function createSlider(parent, text, min, max, default, callback, settingKey)
     local c = new("Frame", { Size = UDim2.new(1, 0, 0, 50), BackgroundColor3 = COLORS.panel, BorderSizePixel = 0 }, parent)
     new("UICorner", { CornerRadius = UDim.new(0, 4) }, c)
     new("UIStroke", { Color = COLORS.border, Thickness = 1, Transparency = 0.5 }, c)
@@ -271,6 +279,14 @@ local function createSlider(parent, text, min, max, default, callback)
     bar.InputBegan:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = true; update(i) end end)
     UserInputService.InputChanged:Connect(function(i) if dragging and i.UserInputType == Enum.UserInputType.MouseMovement then update(i) end end)
     UserInputService.InputEnded:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end end)
+    
+    if settingKey then
+        uiRegistry.sliders[settingKey] = function(val)
+            local relX = math.clamp((val - min) / (max - min), 0, 1)
+            fill.Size = UDim2.new(relX, 0, 1, 0); thumb.Position = UDim2.new(relX, 0, 0.5, 0); vLbl.Text = tostring(val)
+            if callback then callback(val) end
+        end
+    end
     return c
 end
 
@@ -366,23 +382,25 @@ bindButton = createButton(aimPage, "Bind: " .. bindDisplay(settings.aimBind), fu
     if triggerBindListening then triggerBindListening = false; triggerBindButton.Text = "Trigger Bind: " .. bindDisplay(settings.triggerBind) end
     bindListening = true; bindButton.Text = "Press a key / mouse btn..."
 end, false)
+uiRegistry.binds["aimBind"] = function(bind) bindButton.Text = "Bind: " .. bindDisplay(bind) end
 
-createToggle(aimPage, "Aim Assist (players + bots)", false, function(s) settings.aimAssist = s end, nil)
-createToggle(aimPage, "Silent Aim (executor)", false, function(s) settings.silentAim = s end, nil)
-createToggle(aimPage, "Show FOV", false, function(s) settings.showFOV = s; updateFOVCircle() end, nil)
+createToggle(aimPage, "Aim Assist (players + bots)", false, function(s) settings.aimAssist = s end, "aimAssist")
+createToggle(aimPage, "Silent Aim (executor)", false, function(s) settings.silentAim = s end, "silentAim")
+createToggle(aimPage, "Show FOV", false, function(s) settings.showFOV = s; updateFOVCircle() end, "showFOV")
 createSection(aimPage, "PARAMS")
-createSlider(aimPage, "FOV", 20, 500, settings.fov, function(v) settings.fov = v; updateFOVCircle() end)
-createSlider(aimPage, "Smoothness (1=instant, 10=slow)", 1, 10, settings.smoothness, function(v) settings.smoothness = v end)
+createSlider(aimPage, "FOV", 20, 500, settings.fov, function(v) settings.fov = v; updateFOVCircle() end, "fov")
+createSlider(aimPage, "Smoothness (1=instant, 10=slow)", 1, 10, settings.smoothness, function(v) settings.smoothness = v end, "smoothness")
 
 createSection(triggerPage, "TAP TAP")
-createToggle(triggerPage, "Tap Tap (Auto Aim & Fire on Sight)", false, function(s) settings.tapTap = s end, nil)
-createSlider(triggerPage, "Tap Tap Delay (ms)", 10, 500, settings.tapTapDelay, function(v) settings.tapTapDelay = v end)
-createSlider(triggerPage, "Tap Tap Range", 100, 2000, settings.tapTapRange, function(v) settings.tapTapRange = v end)
+createToggle(triggerPage, "Tap Tap (Auto Aim & Fire on Sight)", false, function(s) settings.tapTap = s end, "tapTap")
+createSlider(triggerPage, "Tap Tap Delay (ms)", 10, 500, settings.tapTapDelay, function(v) settings.tapTapDelay = v end, "tapTapDelay")
+createSlider(triggerPage, "Tap Tap Range", 100, 2000, settings.tapTapRange, function(v) settings.tapTapRange = v end, "tapTapRange")
 
 createSection(triggerPage, "TRIGGER BOT")
-createToggle(triggerPage, "Trigger Bot (Auto Fire in Crosshair)", false, function(s) settings.triggerBot = s end, nil)
-createToggle(triggerPage, "Require Hold Key", false, function(s) settings.triggerRequireHold = s end, nil)
-createSlider(triggerPage, "Delay (ms)", 10, 500, settings.triggerDelay, function(v) settings.triggerDelay = v end)
+createToggle(triggerPage, "Trigger Bot (Auto Fire in Crosshair)", false, function(s) settings.triggerBot = s end, "triggerBot")
+createToggle(triggerPage, "Require Hold Key", false, function(s) settings.triggerRequireHold = s end, "triggerRequireHold")
+createSlider(triggerPage, "Delay (ms)", 10, 500, settings.triggerDelay, function(v) settings.triggerDelay = v end, "triggerDelay")
+
 triggerBindButton = createButton(triggerPage, "Trigger Bind: " .. bindDisplay(settings.triggerBind), function()
     if justBoundTrigger then return end
     if triggerBindListening then triggerBindListening = false; triggerBindButton.Text = "Trigger Bind: " .. bindDisplay(settings.triggerBind); return end
@@ -390,17 +408,18 @@ triggerBindButton = createButton(triggerPage, "Trigger Bind: " .. bindDisplay(se
     if tpBindListening then tpBindListening = false; tpBindButton.Text = "TP Bind: " .. bindDisplay(settings.tpBind) end
     triggerBindListening = true; triggerBindButton.Text = "Press a key / mouse btn..."
 end, false)
+uiRegistry.binds["triggerBind"] = function(bind) triggerBindButton.Text = "Trigger Bind: " .. bindDisplay(bind) end
 
 createSection(visualPage, "ESP")
-createToggle(visualPage, "ESP Players", false, function(s) settings.espPlayers = s end, nil)
-createToggle(visualPage, "Box ESP", false, function(s) settings.boxESP = s end, nil)
-createToggle(visualPage, "Health ESP", false, function(s) settings.healthESP = s end, nil)
-createToggle(visualPage, "Name ESP", false, function(s) settings.nameESP = s end, nil)
-createSlider(visualPage, "ESP Distance", 50, 2000, settings.espDistance, function(v) settings.espDistance = v end)
+createToggle(visualPage, "ESP Players", false, function(s) settings.espPlayers = s end, "espPlayers")
+createToggle(visualPage, "Box ESP", false, function(s) settings.boxESP = s end, "boxESP")
+createToggle(visualPage, "Health ESP", false, function(s) settings.healthESP = s end, "healthESP")
+createToggle(visualPage, "Name ESP", false, function(s) settings.nameESP = s end, "nameESP")
+createSlider(visualPage, "ESP Distance", 50, 2000, settings.espDistance, function(v) settings.espDistance = v end, "espDistance")
 createSection(visualPage, "EFFECTS")
-createToggle(visualPage, "Bullet Tracers (Neon)", false, function(s) settings.tracers = s end, nil)
+createToggle(visualPage, "Bullet Tracers (Neon)", false, function(s) settings.tracers = s end, "tracers")
 createToggle(visualPage, "Third Person", false, function(s) settings.thirdPerson = s end, "thirdPerson")
-createSlider(visualPage, "TP Distance", 4, 30, settings.tpDistance, function(v) settings.tpDistance = v end)
+createSlider(visualPage, "TP Distance", 4, 30, settings.tpDistance, function(v) settings.tpDistance = v end, "tpDistance")
 
 tpBindButton = createButton(visualPage, "TP Bind: " .. bindDisplay(settings.tpBind), function()
     if justBoundTp then return end
@@ -409,23 +428,24 @@ tpBindButton = createButton(visualPage, "TP Bind: " .. bindDisplay(settings.tpBi
     if triggerBindListening then triggerBindListening = false; triggerBindButton.Text = "Trigger Bind: " .. bindDisplay(settings.triggerBind) end
     tpBindListening = true; tpBindButton.Text = "Press a key / mouse btn..."
 end, false)
+uiRegistry.binds["tpBind"] = function(bind) tpBindButton.Text = "TP Bind: " .. bindDisplay(bind) end
 
 createSection(antiAimPage, "DEFENSE")
-createToggle(antiAimPage, "Anti-Aim", false, function(s) settings.antiAim = s end, nil)
-createSlider(antiAimPage, "Anti-Aim Speed (1-100)", 1, 100, settings.antiAimSpeed, function(v) settings.antiAimSpeed = v end)
+createToggle(antiAimPage, "Anti-Aim", false, function(s) settings.antiAim = s end, "antiAim")
+createSlider(antiAimPage, "Anti-Aim Speed (1-100)", 1, 100, settings.antiAimSpeed, function(v) settings.antiAimSpeed = v end, "antiAimSpeed")
 createSection(antiAimPage, "DETECT")
-createToggle(antiAimPage, "Detect Aimers", true, function(s) settings.detectAimers = s end, nil)
-createToggle(antiAimPage, "Auto-Escape", false, function(s) settings.autoEscape = s end, nil)
+createToggle(antiAimPage, "Detect Aimers", true, function(s) settings.detectAimers = s end, "detectAimers")
+createToggle(antiAimPage, "Auto-Escape", false, function(s) settings.autoEscape = s end, "autoEscape")
 
 createSection(miscPage, "MOVEMENT")
-createToggle(miscPage, "Bunny Hop", false, function(s) settings.bunnyHop = s; if not s then bunnyState.currentSpeed = 0 end end, nil)
-createToggle(miscPage, "Auto-Strafe (Air Control)", false, function(s) settings.autoStrafe = s end, nil) -- НОВАЯ ФУНКЦИЯ
-createSlider(miscPage, "Bunny Max Speed", 20, 500, settings.bunnyHopMaxSpeed, function(v) settings.bunnyHopMaxSpeed = v end)
-createSlider(miscPage, "Bunny Accel", 1, 30, settings.bunnyHopAccel, function(v) settings.bunnyHopAccel = v end)
-createSlider(miscPage, "Walk Speed", 16, 200, 16, function(v) local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid"); if hum then hum.WalkSpeed = v end end)
+createToggle(miscPage, "Bunny Hop", false, function(s) settings.bunnyHop = s; if not s then bunnyState.currentSpeed = 0 end end, "bunnyHop")
+createToggle(miscPage, "Auto-Strafe (Air Control)", false, function(s) settings.autoStrafe = s end, "autoStrafe")
+createSlider(miscPage, "Bunny Max Speed", 20, 500, settings.bunnyHopMaxSpeed, function(v) settings.bunnyHopMaxSpeed = v end, "bunnyHopMaxSpeed")
+createSlider(miscPage, "Bunny Accel", 1, 30, settings.bunnyHopAccel, function(v) settings.bunnyHopAccel = v end, "bunnyHopAccel")
+createSlider(miscPage, "Walk Speed", 16, 200, settings.walkSpeed, function(v) settings.walkSpeed = v; local hum = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid"); if hum then hum.WalkSpeed = v end end, "walkSpeed")
 createSection(miscPage, "MISC")
-createToggle(miscPage, "Auto Clicker", false, function(s) settings.autoClicker = s end, nil)
-createToggle(miscPage, "Friend Toggle (Mid Click)", true, function(s) settings.friendToggle = s end, nil)
+createToggle(miscPage, "Auto Clicker", false, function(s) settings.autoClicker = s end, "autoClicker")
+createToggle(miscPage, "Friend Toggle (Mid Click)", true, function(s) settings.friendToggle = s end, "friendToggle")
 
 setActivePage("Aimbot")
 rightPanel.Visible = true
@@ -525,7 +545,7 @@ RunService:BindToRenderStep("NexusCamera", Enum.RenderPriority.Camera.Value + 5,
 end)
 
 -- ============================================================
--- ТРИГГЕРБОТ
+-- ТРИГГЕРБОТ & TAP TAP
 -- ============================================================
 local lastShot = 0
 RunService:BindToRenderStep("NexusTrigger", Enum.RenderPriority.Camera.Value + 6, function()
@@ -585,13 +605,9 @@ RunService:BindToRenderStep("NexusTrigger", Enum.RenderPriority.Camera.Value + 6
     end)
 end)
 
--- ============================================================
--- TAP TAP
--- ============================================================
 local lastTapTap = 0
 RunService:BindToRenderStep("NexusTapTap", Enum.RenderPriority.Camera.Value + 7, function()
     if not settings.tapTap then return end
-    
     local camera = workspace.CurrentCamera
     if not camera then return end
     local myChar = LocalPlayer.Character
@@ -652,26 +668,9 @@ RunService:BindToRenderStep("NexusTapTap", Enum.RenderPriority.Camera.Value + 7,
     end)
 end)
 
--- Silent Aim
-task.spawn(function()
-    if not hookmetamethod then return end
-    pcall(function()
-        local mouse = LocalPlayer:GetMouse()
-        local old
-        old = hookmetamethod(game, "__index", function(self, key)
-            if settings.silentAim and self == mouse and (key == "Hit" or key == "Target") then
-                local target = getClosestTarget(settings.fov)
-                if target then 
-                    if key == "Hit" then return CFrame.new(target.Position) end
-                    if key == "Target" then return target end
-                end
-            end
-            return old(self, key)
-        end)
-    end)
-end)
-
--- ESP
+-- ============================================================
+-- ESP & OTHERS
+-- ============================================================
 local espCache = {}
 local aimerSet = {}
 local function setupESPForCharacter(char)
@@ -730,7 +729,7 @@ local function updateESP()
 end
 task.spawn(function() while true do task.wait(0.1); updateESP() end end)
 
--- Auto Clicker
+-- Auto Clicker & Anti-Aim
 task.spawn(function()
     while true do
         task.wait(0.05)
@@ -742,7 +741,6 @@ task.spawn(function()
     end
 end)
 
--- Anti-Aim
 local spinAngle = 0; local jx, jy, jz = 0, 0, 0
 RunService.Heartbeat:Connect(function(dt)
     if not settings.antiAim then return end
@@ -788,7 +786,7 @@ RunService.RenderStepped:Connect(function(dt)
     end
 end)
 
--- Tracers
+-- Tracers, Bhop, Aimers Detect
 local function spawnTracer()
     local char = LocalPlayer.Character
     if not char then return end
@@ -842,43 +840,30 @@ UserInputService.InputBegan:Connect(function(input, processed)
     end
 end)
 
--- ============================================================
--- BUNNY HOP & CS2 STYLE AUTO STRAFE
--- ============================================================
 local bunnyState = { wasAir = false, lastJump = 0, currentSpeed = 0, lastLand = 0 }
 RunService.Heartbeat:Connect(function(dt)
     if not settings.bunnyHop and not settings.autoStrafe then 
         bunnyState.wasAir = false; bunnyState.currentSpeed = 0; return 
     end
-    
     local char = LocalPlayer.Character
     if not char then return end
     local hum = char:FindFirstChildOfClass("Humanoid")
     local hrp = char:FindFirstChild("HumanoidRootPart")
     if not hum or not hrp or hum.Health <= 0 then return end
-    
     local state = hum:GetState()
     local now = tick()
 
-    -- CS2 АВТО-СТРЕЙФ (Управление в воздухе)
     if settings.autoStrafe and state == Enum.HumanoidStateType.Freefall then
         local vel = hrp.AssemblyLinearVelocity
         local horizVel = Vector3.new(vel.X, 0, vel.Z)
         local moveDir = hum.MoveDirection
-        
         if moveDir.Magnitude > 0.1 then
             local wishDir = Vector3.new(moveDir.X, 0, moveDir.Z).Unit
-            
-            -- Скорость, которую мы хотим достичь в направлении движения (в КС это AirSpeedCap)
             local wishSpeed = math.max(30, hum.WalkSpeed) 
-            
-            -- Сколько скорости мы уже имеем в этом направлении
             local currentSpeedInWishDir = horizVel:Dot(wishDir)
             local addSpeed = wishSpeed - currentSpeedInWishDir
-            
-            -- Если можем добавить скорость
             if addSpeed > 0 then
-                local accel = 100 -- Сила воздушного ускорения (влияет на то, как быстро разгоняешься)
+                local accel = 100 
                 local accelSpeed = math.min(accel * dt, addSpeed)
                 horizVel = horizVel + wishDir * accelSpeed
                 hrp.AssemblyLinearVelocity = Vector3.new(horizVel.X, vel.Y, horizVel.Z)
@@ -886,7 +871,6 @@ RunService.Heartbeat:Connect(function(dt)
         end
     end
 
-    -- BUNNY HOP
     if settings.bunnyHop then
         if state ~= Enum.HumanoidStateType.Freefall and state ~= Enum.HumanoidStateType.Jumping and now - bunnyState.lastLand > 2 then 
             bunnyState.currentSpeed = 0 
@@ -913,7 +897,6 @@ RunService.Heartbeat:Connect(function(dt)
     end
 end)
 
--- Детектор аймеров
 local lastLooks = {}
 RunService.Heartbeat:Connect(function(dt)
     if not settings.detectAimers or dt <= 0 then return end
@@ -957,7 +940,164 @@ Players.PlayerRemoving:Connect(function(p)
     if p.Character then lastLooks[p.Character] = nil; aimerSet[p.Character] = nil end
 end)
 
--- Кнопка меню
+-- ============================================================
+-- CONFIG SYSTEM (С ЭКСПОРТОМ И ИМПОРТОМ)
+-- ============================================================
+local configPanel = new("Frame", { Size = UDim2.new(0, 340, 0, 440), Position = UDim2.new(0.5, -170, 0.5, -220), BackgroundColor3 = COLORS.bg, BorderSizePixel = 0, Visible = false, ZIndex = 1000 }, ScreenGui)
+new("UICorner", { CornerRadius = UDim.new(0, 6) }, configPanel)
+new("UIStroke", { Color = COLORS.border, Thickness = 1 }, configPanel)
+
+local cHeader = new("Frame", { Size = UDim2.new(1, 0, 0, 40), BackgroundColor3 = COLORS.panel, BorderSizePixel = 0 }, configPanel)
+new("UICorner", { CornerRadius = UDim.new(0, 6) }, cHeader)
+new("TextLabel", { Size = UDim2.new(1, -40, 1, 0), Position = UDim2.new(0, 10, 0, 0), BackgroundTransparency = 1, Text = "Управление Конфигами", TextColor3 = COLORS.text, Font = Enum.Font.GothamBold, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left }, cHeader)
+local cClose = new("TextButton", { Size = UDim2.new(0, 30, 0, 30), Position = UDim2.new(1, -35, 0.5, -15), BackgroundTransparency = 1, Text = "X", TextColor3 = COLORS.text, Font = Enum.Font.GothamBold, TextSize = 14 }, cHeader)
+cClose.MouseButton1Click:Connect(function() configPanel.Visible = false end)
+
+-- Секция сохранения
+local saveBg = new("Frame", { Size = UDim2.new(1, -20, 0, 40), Position = UDim2.new(0, 10, 0, 50), BackgroundColor3 = COLORS.panel, BorderSizePixel = 0 }, configPanel)
+new("UICorner", { CornerRadius = UDim.new(0, 4) }, saveBg)
+new("UIStroke", { Color = COLORS.border, Thickness = 1 }, saveBg)
+local nameBox = new("TextBox", { Size = UDim2.new(1, -100, 1, 0), Position = UDim2.new(0, 10, 0, 0), BackgroundTransparency = 1, Text = "", PlaceholderText = "Имя конфига...", TextColor3 = COLORS.text, Font = Enum.Font.GothamMedium, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left }, saveBg)
+local saveBtn2 = new("TextButton", { Size = UDim2.new(0, 80, 0, 30), Position = UDim2.new(1, -90, 0.5, -15), BackgroundColor3 = COLORS.accent, BorderSizePixel = 0, Text = "Save", TextColor3 = COLORS.text, Font = Enum.Font.GothamBold, TextSize = 12 }, saveBg)
+new("UICorner", { CornerRadius = UDim.new(0, 4) }, saveBtn2)
+
+-- Секция импорта (Вставить код друга)
+local importBg = new("Frame", { Size = UDim2.new(1, -20, 0, 40), Position = UDim2.new(0, 10, 0, 100), BackgroundColor3 = COLORS.panel, BorderSizePixel = 0 }, configPanel)
+new("UICorner", { CornerRadius = UDim.new(0, 4) }, importBg)
+new("UIStroke", { Color = COLORS.border, Thickness = 1 }, importBg)
+local importBox = new("TextBox", { Size = UDim2.new(1, -100, 1, 0), Position = UDim2.new(0, 10, 0, 0), BackgroundTransparency = 1, Text = "", PlaceholderText = "Вставь код друга сюда...", TextColor3 = COLORS.text, Font = Enum.Font.GothamMedium, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left }, importBg)
+local importBtn = new("TextButton", { Size = UDim2.new(0, 80, 0, 30), Position = UDim2.new(1, -90, 0.5, -15), BackgroundColor3 = COLORS.success, BorderSizePixel = 0, Text = "Import", TextColor3 = COLORS.text, Font = Enum.Font.GothamBold, TextSize = 12 }, importBg)
+new("UICorner", { CornerRadius = UDim.new(0, 4) }, importBtn)
+
+local listBg = new("ScrollingFrame", { Size = UDim2.new(1, -20, 1, -160), Position = UDim2.new(0, 10, 0, 150), BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 2, ScrollBarImageColor3 = COLORS.accent, CanvasSize = UDim2.new(0, 0, 0, 0), AutomaticCanvasSize = Enum.AutomaticSize.Y }, configPanel)
+new("UIListLayout", { Padding = UDim.new(0, 5), SortOrder = Enum.SortOrder.LayoutOrder }, listBg)
+
+-- Функция применения данных (используется и при загрузке файла, и при импорте)
+local function applyConfigData(data)
+    for k, v in pairs(data) do
+        if type(v) == "table" and v.kind then
+            local enumType = v.kind == "keyboard" and Enum.KeyCode or Enum.UserInputType
+            local enumVal = enumType[v.key:gsub("Enum.KeyCode.", ""):gsub("Enum.UserInputType.", "")]
+            if enumVal then
+                settings[k] = { kind = v.kind, key = enumVal }
+                if uiRegistry.binds[k] then uiRegistry.binds[k](settings[k]) end
+            end
+        else
+            if uiRegistry.toggles[k] then uiRegistry.toggles[k](v)
+            elseif uiRegistry.sliders[k] then uiRegistry.sliders[k](v)
+            else settings[k] = v end
+        end
+    end
+end
+
+local function refreshConfigList()
+    for _, child in ipairs(listBg:GetChildren()) do
+        if child:IsA("Frame") then child:Destroy() end
+    end
+    if not hasFileAccess() then return end
+    
+    local files = listfiles(CONFIG_FOLDER)
+    for _, file in ipairs(files) do
+        local name = file:match("([^/\\]+)%.json$")
+        if name then
+            local btnBg = new("Frame", { Size = UDim2.new(1, 0, 0, 35), BackgroundColor3 = COLORS.panel, BorderSizePixel = 0 }, listBg)
+            new("UICorner", { CornerRadius = UDim.new(0, 4) }, btnBg)
+            new("TextLabel", { Size = UDim2.new(1, -150, 1, 0), Position = UDim2.new(0, 10, 0, 0), BackgroundTransparency = 1, Text = name, TextColor3 = COLORS.text, Font = Enum.Font.GothamMedium, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left }, btnBg)
+            
+            -- Кнопка Load
+            local loadBtn = new("TextButton", { Size = UDim2.new(0, 40, 0, 25), Position = UDim2.new(1, -140, 0.5, -12.5), BackgroundColor3 = COLORS.success, BorderSizePixel = 0, Text = "Load", TextColor3 = COLORS.text, Font = Enum.Font.GothamBold, TextSize = 10 }, btnBg)
+            new("UICorner", { CornerRadius = UDim.new(0, 3) }, loadBtn)
+            loadBtn.MouseButton1Click:Connect(function() 
+                local path = CONFIG_FOLDER .. "/" .. name .. ".json"
+                if isfile(path) then
+                    local data = HttpService:JSONDecode(readfile(path))
+                    applyConfigData(data)
+                    showToast("Config loaded: " .. name, COLORS.success)
+                end
+            end)
+
+            -- Кнопка Share (Копировать в буфер)
+            local shareBtn = new("TextButton", { Size = UDim2.new(0, 50, 0, 25), Position = UDim2.new(1, -95, 0.5, -12.5), BackgroundColor3 = COLORS.accent2, BorderSizePixel = 0, Text = "Share", TextColor3 = COLORS.text, Font = Enum.Font.GothamBold, TextSize = 10 }, btnBg)
+            new("UICorner", { CornerRadius = UDim.new(0, 3) }, shareBtn)
+            shareBtn.MouseButton1Click:Connect(function()
+                local path = CONFIG_FOLDER .. "/" .. name .. ".json"
+                if isfile(path) then
+                    local rawStr = readfile(path)
+                    -- Кодируем в Base64, чтобы можно было спокойно скинуть в чат/дискорд
+                    local encoded = nil
+                    pcall(function() encoded = base64_encode(rawStr) end)
+                    
+                    if encoded and typeof(setclipboard) == "function" then
+                        setclipboard(encoded)
+                        showToast("Config copied to clipboard! Send it to friend.", COLORS.success)
+                    else
+                        showToast("Executor doesn't support base64/clipboard", COLORS.danger)
+                    end
+                end
+            end)
+
+            -- Кнопка Delete
+            local delBtn = new("TextButton", { Size = UDim2.new(0, 25, 0, 25), Position = UDim2.new(1, -40, 0.5, -12.5), BackgroundColor3 = COLORS.danger, BorderSizePixel = 0, Text = "X", TextColor3 = COLORS.text, Font = Enum.Font.GothamBold, TextSize = 10 }, btnBg)
+            new("UICorner", { CornerRadius = UDim.new(0, 3) }, delBtn)
+            delBtn.MouseButton1Click:Connect(function()
+                pcall(function() delfile(CONFIG_FOLDER .. "/" .. name .. ".json") end)
+                refreshConfigList()
+            end)
+        end
+    end
+end
+
+-- Логика импорта
+importBtn.MouseButton1Click:Connect(function()
+    local str = importBox.Text
+    if str == "" then return showToast("Paste friend's code first", COLORS.danger) end
+    
+    local decoded = nil
+    pcall(function() decoded = base64_decode(str) end)
+    
+    if decoded then
+        local success, data = pcall(function() return HttpService:JSONDecode(decoded) end)
+        if success and type(data) == "table" then
+            applyConfigData(data)
+            showToast("Config imported successfully!", COLORS.success)
+            importBox.Text = ""
+        else
+            showToast("Invalid config format", COLORS.danger)
+        end
+    else
+        showToast("Invalid Base64 string", COLORS.danger)
+    end
+end)
+
+configBtn.MouseButton1Click:Connect(function()
+    configPanel.Visible = not configPanel.Visible
+    if configPanel.Visible and hasFileAccess() then refreshConfigList() end
+end)
+
+saveBtn2.MouseButton1Click:Connect(function()
+    local name = nameBox.Text
+    if name == "" then return showToast("Enter a name!", COLORS.danger) end
+    if hasFileAccess() then
+        local data = {}
+        for k, v in pairs(settings) do
+            if type(v) == "table" and v.kind then
+                data[k] = { kind = v.kind, key = tostring(v.key) }
+            else
+                data[k] = v
+            end
+        end
+        pcall(function() writefile(CONFIG_FOLDER .. "/" .. name .. ".json", HttpService:JSONEncode(data)) end)
+        showToast("Config saved: " .. name, COLORS.success)
+        nameBox.Text = ""
+        refreshConfigList()
+    else
+        showToast("Executor doesn't support file I/O", COLORS.danger)
+    end
+end)
+
+-- ============================================================
+-- MAIN LOOP (Открытие меню)
+-- ============================================================
 local openBtn = new("TextButton", { Size = UDim2.new(0, 120, 0, 30), Position = UDim2.new(0, 20, 0, 20), BackgroundColor3 = COLORS.panel, BorderSizePixel = 0, Text = "[ NEVER WIN ]", TextColor3 = COLORS.text, Font = Enum.Font.GothamBold, TextSize = 12, AutoButtonColor = false, ZIndex = 100 }, ScreenGui)
 new("UICorner", { CornerRadius = UDim.new(0, 4) }, openBtn)
 new("UIStroke", { Color = COLORS.accent, Thickness = 1 }, openBtn)
@@ -1013,35 +1153,6 @@ UserInputService.InputBegan:Connect(function(input, processed)
         return
     end
     if processed then return end
-
-    if input.UserInputType == Enum.UserInputType.MouseButton3 then
-        local isAimMb3 = settings.aimBind.kind == "mouse" and settings.aimBind.key == Enum.UserInputType.MouseButton3
-        local isTpMb3 = settings.tpBind.kind == "mouse" and settings.tpBind.key == Enum.UserInputType.MouseButton3
-        local isTrigMb3 = settings.triggerBind.kind == "mouse" and settings.triggerBind.key == Enum.UserInputType.MouseButton3
-        if not isAimMb3 and not isTpMb3 and not isTrigMb3 and settings.friendToggle then
-            local camera = workspace.CurrentCamera
-            local center = camera.ViewportSize / 2
-            local nearest, dist = nil, 800
-            for _, p in ipairs(Players:GetPlayers()) do
-                if p ~= LocalPlayer and p.Character then
-                    local head = p.Character:FindFirstChild("Head")
-                    local hum = p.Character:FindFirstChildOfClass("Humanoid")
-                    if head and hum and hum.Health > 0 then
-                        local sp, on = camera:WorldToViewportPoint(head.Position)
-                        if on and sp.Z > 0 then
-                            local d = (Vector2.new(sp.X, sp.Y) - center).Magnitude
-                            if d < dist then dist = d; nearest = p end
-                        end
-                    end
-                end
-            end
-            if nearest then
-                local added = toggleFriend(nearest)
-                if added then showToast("+ Friend: " .. nearest.Name, COLORS.success)
-                else showToast("- Unfriend: " .. nearest.Name, COLORS.danger) end
-            else showToast("No player under crosshair") end
-        end
-    end
 
     if matchesBind(input, settings.aimBind) then aimKeyHeld = true end
     if matchesBind(input, settings.triggerBind) then triggerKeyHeld = true end
